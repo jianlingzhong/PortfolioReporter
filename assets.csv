@@ -1,0 +1,26 @@
+Account,Symbol,Amount,Cost,Notes
+Retirement 401k,FXAIX,150.75,20000.00,S&P 500 Index Fund
+Retirement 401k,VEMAX,80.50,7500.00,Emerging Markets Fund
+Retirement 401k,VBTLX,200.00,20000.00,Total Bond Market Index
+Brokerage Main,AAPL,25,3000.50,Apple Stock
+Brokerage Main,MSFT,15,2500.75,Microsoft Stock
+Brokerage Main,GOOG,10,12000.00,Alphabet Stock
+Brokerage Main,BRK.B,5,1500.00,Berkshire Hathaway B
+Brokerage Main,NONEXISTENT,100,1000,This symbol won't be found
+Brokerage Fun,TSLA,5,2000.00,Tesla Stock
+Brokerage Fun,GLD,10,1800.00,Gold ETF
+Roth IRA,VOO,40.25,15000.00,Vanguard S&P 500 ETF
+Roth IRA,QQQM,50.75,7000.00,Nasdaq 100 Index ETF
+Roth IRA,SCHD,30,2000.00,Schwab Dividend ETF
+Checking Account,CASH,12345.67,0,Primary Checking
+Savings Account,CASH,50000.00,0,High Yield Savings
+Fidelity CMA,SPAXX,25000.00,25000.00,Fidelity Money Market - treat as cash
+Vanguard Brokerage,VMFXX,15000.00,15000.00,Vanguard Money Market - treat as cash
+Interactive Brokers,IBKR,10,500.00,IB Stock
+Interactive Brokers,EUR/USD,0,0,Forex Pair - yfinance uses EURUSD=X
+Interactive Brokers,BTC-USD,0.15,6000.00,Bitcoin
+Old Account,MYOLDSTOCK,100,500.00,A delisted stock example
+Brokerage Main,BF.B,20,800.00,Brown-Forman B
+Taxable Account,VTIAX,75.5,9500.00,Vanguard Total International Stock Index Fund Admiral Shares
+Taxable Account,VTWAX,50.2,6000.00,Vanguard Total World Stock Index Fund Admiral Shares
+Taxable Account,BND,100,7500.00,Vanguard Total Bond Market ETF
