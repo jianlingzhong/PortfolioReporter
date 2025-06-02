@@ -11,11 +11,11 @@ from portfolio_analyzer.data_processing import process_portfolio_data
 from portfolio_analyzer.report_generator import generate_html_report
 from portfolio_analyzer.section_builders import (
     build_key_metrics_section,
-    build_asset_allocation_section,
     build_holdings_summary_section,
     build_historical_networth_section,
     build_summary_by_symbol_section,
     build_summary_by_risk_level_section,
+    build_summary_by_asset_class_section,
     build_top_movers_section  # Ensure this is imported
 )
 
@@ -32,10 +32,10 @@ def clean_currency_string(value):
     if s.startswith('(') and s.endswith(')'): is_negative = True; s = s[1:-1]
     s = re.sub(r'[$\s,]', '', s)
     try:
-        num = float(s);
+        num = float(s)
         return -num if is_negative else num
     except ValueError:
-        logging.debug(f"Could not convert currency string '{value}' to float.");
+        logging.debug(f"Could not convert currency string '{value}' to float.")
         return np.nan
 
 
@@ -78,15 +78,45 @@ def load_portfolio_data(input_file_path: str | None) -> pd.DataFrame:
                 if col_name in df.columns:
                     df[col_name] = df[col_name].apply(clean_currency_string)
                     df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
+
+            # Identify rows with NaN in 'Amount' or 'Symbol' *before* dropping them
+            # Note: 'Symbol' is loaded as string, so it's unlikely to be NaN unless it was empty in CSV.
+            # 'Amount' is numeric, so it can become NaN after to_numeric if it wasn't a valid number.
+            invalid_rows_mask = df['Amount'].isna() | df['Symbol'].isna() | (df['Symbol'] == '')
+            if 'Symbol' in df.columns:  # Ensure Symbol column exists
+                invalid_rows_mask = df['Amount'].isna() | df['Symbol'].isna() | (
+                        df['Symbol'].astype(str).str.strip() == '')
+
+            invalid_df = df[invalid_rows_mask]
+
             initial_rows = len(df)
             df.dropna(subset=['Amount', 'Symbol'], inplace=True)
-            if len(df) < initial_rows: logging.warning(
-                f"{initial_rows - len(df)} rows dropped due to invalid/missing 'Amount' or 'Symbol'.")
+            # Also drop rows where Symbol might be an empty string after stripping
+            if 'Symbol' in df.columns:
+                df = df[df['Symbol'].astype(str).str.strip() != '']
+
+            dropped_count = initial_rows - len(df)
+
+            if dropped_count > 0:
+                logging.warning(
+                    f"{dropped_count} rows dropped due to invalid/missing 'Amount' or 'Symbol'.")
+                if not invalid_df.empty:
+                    logging.warning("First few invalid rows (before dropping):")
+                    # Log only a few to avoid spamming the console if there are many
+                    log_limit = min(len(invalid_df), 3)
+                    for i in range(log_limit):
+                        logging.warning(f"  Row index {invalid_df.index[i]}: {invalid_df.iloc[i].to_dict()}")
+                else:
+                    # This case might happen if rows were dropped due to empty Symbol strings that weren't initially NaN
+                    logging.warning(
+                        "  (Could not display specific invalid rows, check for empty Symbol strings or Amount conversion issues)")
+
             if df.empty: raise ValueError("No valid data rows after initial cleaning.")
+
             if 'Cost' in df.columns:
                 df['Cost'] = df['Cost'].fillna(0.0)
             else:
-                df['Cost'] = 0.0;
+                df['Cost'] = 0.0
                 logging.warning("Cost column was missing, defaulted to 0.0.")
             df['Symbol'] = df['Symbol'].astype(str).str.upper().str.strip()
             logging.info(f"Cleaned and prepared portfolio data. Shape: {df.shape}")
@@ -94,7 +124,7 @@ def load_portfolio_data(input_file_path: str | None) -> pd.DataFrame:
         except (FileNotFoundError, ValueError) as e:
             logging.warning(f"{e}. Proceeding with default sample data.")
         except Exception as e:
-            logging.error(f"Unexpected error loading CSV '{input_file_path}': {e}");
+            logging.error(f"Unexpected error loading CSV '{input_file_path}': {e}")
             logging.warning(
                 "Proceeding with default sample data.")
     logging.info("Using default sample data.")
@@ -130,7 +160,7 @@ def main():
         "Failed to process portfolio data. Exiting."); return
 
     logging.info("\nProcessed Portfolio Data (first 5 rows):")
-    print(processed_df.head().to_string())
+    logging.info(processed_df.head().to_string())
 
     report_sections = {}
     report_sections["Key Performance Indicators"] = build_key_metrics_section(
@@ -144,8 +174,12 @@ def main():
     )
     report_sections["Summary by Symbol"] = build_summary_by_symbol_section(processed_df)
     report_sections["Summary by Asset Risk Level"] = build_summary_by_risk_level_section(processed_df)
+
+    # MODIFIED: Replaced allocation charts with the new summary table
+    report_sections["Summary by Asset Class"] = build_summary_by_asset_class_section(processed_df)
+
     report_sections["Holdings Details"] = build_holdings_summary_section(processed_df)
-    report_sections["Asset Allocation Overview"] = build_asset_allocation_section(processed_df)
+    # REMOVED: report_sections["Asset Allocation Overview"] = build_asset_allocation_section(processed_df)
 
     logging.info("Generating HTML report...")
     report_file = PROJECT_ROOT / "portfolio_report.html"
