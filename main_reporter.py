@@ -16,7 +16,7 @@ from portfolio_analyzer.section_builders import (
     build_summary_by_symbol_section,
     build_summary_by_risk_level_section,
     build_summary_by_asset_class_section,
-    build_top_movers_section  # Ensure this is imported
+    build_top_movers_section
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -162,28 +162,46 @@ def main():
     logging.info("\nProcessed Portfolio Data (first 5 rows):")
     logging.info(processed_df.head().to_string())
 
-    report_sections = {}
-    report_sections["Key Performance Indicators"] = build_key_metrics_section(
-        processed_df, portfolio_df_input, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
-    )
-    report_sections["Historical Net Worth"] = build_historical_networth_section(
-        portfolio_df_input, default_period="1y", rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
-    )
-    report_sections["Top Asset Movers"] = build_top_movers_section(
-        portfolio_df_input, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
-    )
-    report_sections["Summary by Symbol"] = build_summary_by_symbol_section(processed_df)
-    report_sections["Summary by Asset Risk Level"] = build_summary_by_risk_level_section(processed_df)
+    report_sections = {
+        "Key Performance Indicators": build_key_metrics_section(
+            processed_df, portfolio_df_input, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
+        ),
+        "Historical Net Worth": build_historical_networth_section(
+            portfolio_df_input, default_period="1y", rebuild_cache=args.rebuild_cache,
+            interactive_fallback=interactive_mode
+        ),
+        "Top Asset Movers": build_top_movers_section(
+            portfolio_df_input, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
+        ),
+        "Summary by Symbol": build_summary_by_symbol_section(
+            processed_df, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
+        ),
+        "Summary by Asset Risk Level": build_summary_by_risk_level_section(
+            processed_df, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
+        ),
+        "Summary by Asset Class": build_summary_by_asset_class_section(
+            processed_df, rebuild_cache=args.rebuild_cache, interactive_fallback=interactive_mode
+        ),
+        "Holdings Details": build_holdings_summary_section(processed_df)
+    }
 
-    # MODIFIED: Replaced allocation charts with the new summary table
-    report_sections["Summary by Asset Class"] = build_summary_by_asset_class_section(processed_df)
-
-    report_sections["Holdings Details"] = build_holdings_summary_section(processed_df)
-    # REMOVED: report_sections["Asset Allocation Overview"] = build_asset_allocation_section(processed_df)
+    # Prepare data for JS drill-down to make it more robust
+    drilldown_data_df = processed_df.copy()
+    drilldown_data_df.rename(columns={
+        'Market Value': 'Market_Value_raw',
+        'Cost': 'Cost_raw',
+        'price': 'price_raw',
+        'Amount': 'Amount_raw'
+    }, inplace=True)
+    drilldown_cols = ['Account', 'Symbol', 'name', 'Amount_raw', 'price_raw', 'Market_Value_raw', 'Cost_raw',
+                      'Risk Level', 'Asset Class']
+    # Ensure all required columns exist before trying to select them
+    final_drilldown_cols = [col for col in drilldown_cols if col in drilldown_data_df.columns]
+    drilldown_json = drilldown_data_df[final_drilldown_cols].to_json(orient='records', date_format='iso')
 
     logging.info("Generating HTML report...")
     report_file = PROJECT_ROOT / "portfolio_report.html"
-    generate_html_report(report_sections, output_path=str(report_file))
+    generate_html_report(report_sections, output_path=str(report_file), drilldown_data=drilldown_json)
 
     try:
         import os

@@ -26,7 +26,7 @@ def get_cached_asset_info(symbol: str, rebuild_cache: bool = False) -> dict | No
     cache_file = ASSET_INFO_CACHE_DIR / f"{symbol.upper()}.json"
     if cache_file.exists():
         try:
-            with open(cache_file, 'r') as f:
+            with open(cache_file, 'r', encoding='utf-8') as f:
                 cached_data = json.load(f)
 
             cache_timestamp_str = cached_data.get("_cache_timestamp_utc")
@@ -35,13 +35,11 @@ def get_cached_asset_info(symbol: str, rebuild_cache: bool = False) -> dict | No
                 if datetime.now(timezone.utc) - cache_timestamp < timedelta(hours=ASSET_INFO_MAX_AGE_HOURS):
                     logging.debug(f"Asset info for {symbol} is fresh from cache.")
                     return cached_data.get("data")
-                else:
-                    logging.info(
-                        f"Cached asset info for {symbol} is STALE (older than {ASSET_INFO_MAX_AGE_HOURS}h). Will re-fetch.")
-                    return None
-            else:
-                logging.warning(f"Cached asset info for {symbol} missing timestamp. Will re-fetch.")
+                logging.info(
+                    f"Cached asset info for {symbol} is STALE (older than {ASSET_INFO_MAX_AGE_HOURS}h). Will re-fetch.")
                 return None
+            logging.warning(f"Cached asset info for {symbol} missing timestamp. Will re-fetch.")
+            return None
         except Exception as e:
             logging.warning(f"Error loading/validating cached asset info for {symbol}: {e}. Will re-fetch.")
     return None
@@ -55,7 +53,7 @@ def cache_asset_info(symbol: str, info_data: dict):
         "data": info_data
     }
     try:
-        with open(cache_file, 'w') as f:
+        with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(data_to_cache, f, indent=4, default=str)
         logging.debug(f"Cached asset info for {symbol}.")
     except Exception as e:
@@ -89,6 +87,8 @@ def get_cached_historical_prices(symbols: list, period: str, end_date_for_period
         try:
             df = pd.read_parquet(cache_file)
             if isinstance(df.index, pd.DatetimeIndex):
+                # This assertion helps static type checkers understand the index type
+                assert isinstance(df.index, pd.DatetimeIndex)
                 df.index = pd.to_datetime(df.index).tz_localize(None)  # Ensure naive for consistency
             logging.info(
                 f"Historical prices for {symbols} (period: {period}, end: {end_date_str}): Using CACHED data ({filename}).")
@@ -112,8 +112,11 @@ def cache_historical_prices(symbols: list, period: str, end_date_for_period: dat
     cache_file = HISTORICAL_PRICES_CACHE_DIR / filename
     try:
         df_to_cache = prices_df.copy()
-        if isinstance(df_to_cache.index, pd.DatetimeIndex) and df_to_cache.index.tz is not None:
-            df_to_cache.index = df_to_cache.index.tz_localize(None)
+        if isinstance(df_to_cache.index, pd.DatetimeIndex):
+            # This assertion helps static type checkers understand the index type
+            assert isinstance(df_to_cache.index, pd.DatetimeIndex)
+            if df_to_cache.index.tz is not None:
+                df_to_cache.index = df_to_cache.index.tz_localize(None)
 
         df_to_cache.to_parquet(cache_file, index=True)
         logging.debug(f"Cached historical prices for {symbols} (period: {period}, end: {end_date_str}) to {filename}.")
@@ -124,7 +127,7 @@ def cache_historical_prices(symbols: list, period: str, end_date_for_period: dat
 def load_symbol_mappings() -> dict:
     if SYMBOL_MAPPINGS_FILE.exists():
         try:
-            with open(SYMBOL_MAPPINGS_FILE, 'r') as f:
+            with open(SYMBOL_MAPPINGS_FILE, 'r', encoding='utf-8') as f:
                 mappings = json.load(f)
             logging.debug("Loaded symbol mappings from cache.")
             return mappings
@@ -135,7 +138,7 @@ def load_symbol_mappings() -> dict:
 
 def save_symbol_mappings(mappings: dict):
     try:
-        with open(SYMBOL_MAPPINGS_FILE, 'w') as f:
+        with open(SYMBOL_MAPPINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(mappings, f, indent=4)
         logging.debug("Saved symbol mappings to cache.")
     except Exception as e:

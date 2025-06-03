@@ -9,75 +9,300 @@ import logging
 import re
 import plotly.graph_objects as go
 from datetime import datetime, timezone
-from .report_components import create_bar_chart_figure, create_html_table
+from .report_components import create_html_table
 from .data_processing import get_historical_prices, get_effective_symbol_info
 
 logger = logging.getLogger(__name__)  # Keep this commented unless you need module-specific logger
 
 
-# --- build_asset_allocation_section and build_holdings_summary_section ---
-# (These remain the same from your last correct version)
-def build_asset_allocation_section(processed_df: pd.DataFrame) -> dict:
-    """Builds the Asset Allocation Overview section dictionary using bar charts."""
-    logging.info("Building asset allocation section (using bar charts)...")
-    charts_html_list = []
-
-    # Chart 1: Allocation by Asset Type
-    alloc_type_df = processed_df.groupby("type")["Market Value"].sum().reset_index()
-    alloc_type_df = alloc_type_df[alloc_type_df["Market Value"] > 0].sort_values(by="Market Value",
-                                                                                 ascending=True)  # Ascending for horizontal bar
-
-    if not alloc_type_df.empty:
-        fig_alloc_type = create_bar_chart_figure(
-            df_grouped=alloc_type_df,
-            x_col="type",  # Categories on Y-axis
-            y_col="Market Value",  # Values on X-axis
-            title="Asset Allocation by Type",
-            x_axis_title=None,  # Asset Type will be y-axis label
-            y_axis_title="Market Value (USD)",
-            orientation='h'
-        )
-        fig_alloc_type.update_layout(
-            margin=dict(t=50, b=40, l=120, r=40),  # Increased left margin for type labels
-            yaxis=dict(title_text="Asset Type")  # Explicitly set y-axis title for horizontal
-        )
-        charts_html_list.append(fig_alloc_type.to_html(
-            full_html=False, include_plotlyjs=False, div_id="chart-alloc-type", config={'responsive': True}
-        ))
-
-    # Chart 2: Allocation by Sector
-    sector_allocation_df_source = processed_df[
-        ~processed_df["type"].isin(["Cash", "Mutual Fund", "Other", "Unknown"]) &
-        (processed_df["sector"].notna()) & (processed_df["sector"] != "N/A") &
-        (processed_df["sector"] != "N/A ETF Category")
-        ]
-    if not sector_allocation_df_source.empty:
-        alloc_sector_df = sector_allocation_df_source.groupby("sector")["Market Value"].sum().reset_index()
-        alloc_sector_df = alloc_sector_df[alloc_sector_df["Market Value"] > 0].sort_values(by="Market Value",
-                                                                                           ascending=False)
-
-        if not alloc_sector_df.empty:
-            fig_alloc_sector = create_bar_chart_figure(
-                df_grouped=alloc_sector_df,
-                x_col="sector",
-                y_col="Market Value",
-                title="Stock & ETF Allocation by Sector",
-                x_axis_title="Sector",
-                y_axis_title="Market Value (USD)",
-                orientation='v'
-            )
-            fig_alloc_sector.update_layout(
-                xaxis_tickangle=-45,
-                margin=dict(t=50, b=120, l=60, r=20)  # Increased bottom margin
-            )
-            charts_html_list.append(fig_alloc_sector.to_html(
-                full_html=False, include_plotlyjs=False, div_id="chart-alloc-sector", config={'responsive': True}
-            ))
-
-    return {"type": "charts_vertical", "charts": charts_html_list}
+def _format_change_dollar(val: float | None) -> str:
+    """Formats a dollar change value into a color-coded HTML span."""
+    if pd.isnull(val) or not np.isfinite(val): return "-"
+    klass = "positive" if val > 0 else "negative" if val < 0 else "neutral"
+    sign = "+" if val >= 0 else ""
+    return f'<span class="{klass}">{sign}${val:,.2f}</span>'
 
 
-# --- MODIFIED calculate_net_worth_and_spy_benchmark ---
+def _format_change_percent(val: float | None) -> str:
+    """Formats a percentage change value into a color-coded HTML span."""
+    if pd.isnull(val) or not np.isfinite(val): return "-"
+    klass = "positive" if val > 0 else "negative" if val < 0 else "neutral"
+    sign = "+" if val >= 0 else ""
+    return f'<span class="{klass}">{sign}{val:.2f}%</span>'
+
+
+def _build_summary_table_with_changes(
+        processed_df: pd.DataFrame,
+        group_by_col: str,
+        rebuild_cache: bool = False,
+        interactive_fallback: bool = True
+) -> pd.DataFrame:
+    """
+    Helper function to build a summary table with market value changes over various periods.
+    """
+    if processed_df.empty or group_by_col not in processed_df.columns:
+        return pd.DataFrame()
+
+    # 1. Basic Aggregation (Current Value, Cost, Count)
+    summary_df = processed_df.groupby(group_by_col).agg(
+        Total_Market_Value=('Market Value', 'sum'),
+        Total_Cost=('Cost', 'sum'),
+        Asset_Count=('Symbol', 'nunique')
+    ).reset_index()
+
+    # 2. Prepare for Historical Calculations
+    periods = {'1D': 1, '5D': 5, '1M': 20, '3M': 63, '6M': 126}
+    symbols_for_history = processed_df[processed_df['type'] != 'Cash']['Symbol'].unique().tolist()
+
+    if not symbols_for_history:
+        # If there are no non-cash assets, we can't calculate changes. Return the basic summary.
+        return summary_df
+
+    # Fetch historical prices for all non-cash assets for the longest required period.
+    historical_prices = get_historical_prices(
+        symbols_for_history,
+        period="7mo",  # Fetch enough data for the 6-month change
+        end_date_dt=datetime.now(timezone.utc),
+        rebuild_cache=rebuild_cache,
+        interactive_fallback=interactive_fallback
+    )
+
+    if historical_prices.empty:
+        logging.warning("Could not fetch any historical prices for summary change calculations.")
+        return summary_df
+
+    # 3. Calculate Past Market Values for each group
+    for period_name, days_ago in periods.items():
+        col_name = f'Past_Value_{period_name}'
+        summary_df[col_name] = 0.0
+
+        for index, group_row in summary_df.iterrows():
+            group_name = group_row[group_by_col]
+            # Find all holdings that belong to the current group (e.g., a specific Asset Class)
+            group_holdings = processed_df[processed_df[group_by_col] == group_name]
+
+            past_group_value = 0.0
+            for _, holding_row in group_holdings.iterrows():
+                symbol = holding_row['Symbol']
+                amount = holding_row['Amount']
+                is_cash = holding_row.get('type') == 'Cash'
+
+                # Use get_asset_value_at_offset to find the value of this holding `days_ago`
+                value_at_offset = get_asset_value_at_offset(
+                    symbol, amount, historical_prices, days_ago, is_cash
+                )
+                if value_at_offset is not None and np.isfinite(value_at_offset):
+                    past_group_value += value_at_offset
+
+            summary_df.loc[index, col_name] = past_group_value
+
+    # 4. Calculate Change Columns ($ and %)
+    for period_name in periods:
+        past_val_col = f'Past_Value_{period_name}'
+        change_dollar_col = f'Change_{period_name}_$'
+        change_pct_col = f'Change_{period_name}_%'
+
+        summary_df[change_dollar_col] = summary_df['Total_Market_Value'] - summary_df[past_val_col]
+        summary_df[change_pct_col] = (summary_df[change_dollar_col] / summary_df[past_val_col].replace(0, np.nan)) * 100
+
+    return summary_df
+
+
+def build_summary_by_symbol_section(
+        processed_df: pd.DataFrame,
+        rebuild_cache: bool = False,
+        interactive_fallback: bool = True
+) -> dict:
+    """Builds the Summary by Symbol table section with value changes."""
+    logging.info("Building summary by symbol section with value changes...")
+
+    if processed_df.empty or 'Symbol' not in processed_df.columns:
+        return {"type": "html_content", "html": "<p>No data available for symbol summary.</p>"}
+
+    # 1. Basic aggregation for fields not covered by the change calculator
+    base_summary_df = processed_df.groupby('Symbol').agg(
+        Name=('name', 'first'),
+        Total_Amount=('Amount', 'sum'),
+        Latest_Price=('price', 'first'),
+        Asset_Type=('type', 'first'),
+        Sector=('sector', 'first'),
+        Risk_Level=('Risk Level', 'first'),
+    ).reset_index()
+
+    # 2. Get the change data using the helper
+    change_summary_df = _build_summary_table_with_changes(
+        processed_df, 'Symbol', rebuild_cache, interactive_fallback
+    )
+
+    if change_summary_df.empty:
+        logging.warning("Failed to calculate changes for symbol summary. Returning basic table.")
+        summary_df = base_summary_df
+        summary_df['Total_Market_Value'] = processed_df.groupby('Symbol')['Market Value'].sum().values
+        summary_df['Total_Cost'] = processed_df.groupby('Symbol')['Cost'].sum().values
+    else:
+        # 3. Merge the two dataframes
+        summary_df = pd.merge(base_summary_df, change_summary_df, on='Symbol', how='left')
+
+    # 4. Formatting for display
+    summary_df['Total Market Value'] = summary_df['Total_Market_Value'].apply(
+        lambda x: f"${x:,.2f}" if pd.notnull(x) else "N/A")
+    summary_df['Total_Cost'] = summary_df['Total_Cost'].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "N/A")
+    summary_df['Latest_Price'] = summary_df['Latest_Price'].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "N/A")
+    summary_df['Total_Amount'] = summary_df['Total_Amount'].apply(
+        lambda x: f"{x:,.4f}".rstrip('0').rstrip('.') if pd.notnull(x) and isinstance(x, float) and x % 1 != 0 else (
+            f"{x:,.0f}" if pd.notnull(x) and isinstance(x, (int, float)) else ("N/A" if pd.isnull(x) else str(x)))
+    )
+
+    # Dynamically format all change columns if they exist
+    periods = {'1D': 1, '5D': 5, '1M': 20, '3M': 63, '6M': 126}
+    for p_name in periods:
+        dollar_col_data = f'Change_{p_name}_$'
+        pct_col_data = f'Change_{p_name}_%'
+        dollar_col_display = f'Change {p_name} ($)'
+        pct_col_display = f'Change {p_name} (%)'
+        if dollar_col_data in summary_df.columns:
+            summary_df[dollar_col_display] = summary_df[dollar_col_data].apply(_format_change_dollar)
+        if pct_col_data in summary_df.columns:
+            summary_df[pct_col_display] = summary_df[pct_col_data].apply(_format_change_percent)
+
+    # Rename columns for final display
+    summary_df.rename(columns={
+        'Symbol': 'Symbol',
+        'Name': 'Asset Name',
+        'Total_Amount': 'Total Amount',
+        'Latest_Price': 'Latest Price',
+        'Asset_Type': 'Type',
+        'Sector': 'Sector',
+        'Risk_Level': 'Risk Level'
+    }, inplace=True)
+
+    # 5. Define the order of columns
+    cols_ordered = [
+        'Symbol', 'Asset Name', 'Total Amount', 'Latest Price', 'Total Market Value', 'Total Cost',
+        'Change 1D ($)', 'Change 1D (%)', 'Change 5D ($)', 'Change 5D (%)',
+        'Change 1M ($)', 'Change 1M (%)', 'Change 3M ($)', 'Change 3M (%)',
+        'Change 6M ($)', 'Change 6M (%)',
+        'Type', 'Sector', 'Risk Level'
+    ]
+
+    final_cols_to_display = [col for col in cols_ordered if col in summary_df.columns]
+    summary_df_display = summary_df[final_cols_to_display]
+
+    html_content = create_html_table(
+        df_display=summary_df_display,
+        table_title="Summary by Symbol",
+        table_id="summaryBySymbolTable"
+    )
+    return {"type": "table", "html": html_content}
+
+
+def build_summary_by_risk_level_section(processed_df: pd.DataFrame, rebuild_cache: bool = False,
+                                        interactive_fallback: bool = True) -> dict:
+    logging.info("Building summary by asset risk level section with value changes...")
+
+    summary_df = _build_summary_table_with_changes(
+        processed_df, 'Risk Level', rebuild_cache, interactive_fallback
+    )
+
+    if summary_df.empty:
+        return {"type": "html_content", "html": "<p>No data available for risk level summary.</p>"}
+
+    total_portfolio_value = processed_df['Market Value'].sum()
+    if total_portfolio_value > 0:
+        summary_df['Allocation (%)'] = (summary_df['Total_Market_Value'] / total_portfolio_value) * 100
+    else:
+        summary_df['Allocation (%)'] = 0.0
+
+    # Format columns for display
+    summary_df['Total Market Value'] = summary_df['Total_Market_Value'].apply(lambda x: f"${x:,.2f}")
+    summary_df['Total_Cost'] = summary_df['Total_Cost'].apply(lambda x: f"${x:,.2f}")
+    summary_df['Allocation (%)'] = summary_df['Allocation (%)'].apply(lambda x: f"{x:.2f}%")
+
+    # Dynamically format all change columns
+    periods = {'1D': 1, '5D': 5, '1M': 20, '3M': 63, '6M': 126}
+    for p_name in periods:
+        summary_df[f'Change {p_name} ($)'] = summary_df[f'Change_{p_name}_$'].apply(_format_change_dollar)
+        summary_df[f'Change {p_name} (%)'] = summary_df[f'Change_{p_name}_%'].apply(_format_change_percent)
+
+    summary_df.rename(columns={
+        'Risk Level': 'Risk Level Category',
+        'Total_Cost': 'Total Cost',
+        'Asset_Count': '# Assets'
+    }, inplace=True)
+
+    summary_df = summary_df.sort_values(by='Risk Level Category')
+
+    # Define final column order
+    cols_ordered = [
+        'Risk Level Category', 'Total Market Value', 'Allocation (%)', 'Total Cost', '# Assets',
+        'Change 1D ($)', 'Change 1D (%)', 'Change 5D ($)', 'Change 5D (%)',
+        'Change 1M ($)', 'Change 1M (%)', 'Change 3M ($)', 'Change 3M (%)',
+        'Change 6M ($)', 'Change 6M (%)'
+    ]
+
+    final_cols = [col for col in cols_ordered if col in summary_df.columns]
+
+    html_content = create_html_table(
+        df_display=summary_df[final_cols],
+        table_title="Summary by Asset Risk Level",
+        table_id="summaryByRiskTable"
+    )
+    return {"type": "table", "html": html_content}
+
+
+def build_summary_by_asset_class_section(processed_df: pd.DataFrame, rebuild_cache: bool = False,
+                                         interactive_fallback: bool = True) -> dict:
+    """Builds the Summary by Asset Class table with value changes."""
+    logging.info("Building summary by asset class section with value changes...")
+
+    summary_df = _build_summary_table_with_changes(
+        processed_df, 'Asset Class', rebuild_cache, interactive_fallback
+    )
+
+    if summary_df.empty:
+        return {"type": "html_content", "html": "<p>No data available for asset class summary.</p>"}
+
+    total_portfolio_value = processed_df['Market Value'].sum()
+    if total_portfolio_value > 0:
+        summary_df['Allocation (%)'] = (summary_df['Total_Market_Value'] / total_portfolio_value) * 100
+    else:
+        summary_df['Allocation (%)'] = 0.0
+
+    # Format columns for display
+    summary_df['Total Market Value'] = summary_df['Total_Market_Value'].apply(lambda x: f"${x:,.2f}")
+    summary_df['Total_Cost'] = summary_df['Total_Cost'].apply(lambda x: f"${x:,.2f}")
+    summary_df['Allocation (%)'] = summary_df['Allocation (%)'].apply(lambda x: f"{x:.2f}%")
+
+    periods = {'1D': 1, '5D': 5, '1M': 20, '3M': 63, '6M': 126}
+    for p_name in periods:
+        summary_df[f'Change {p_name} ($)'] = summary_df[f'Change_{p_name}_$'].apply(_format_change_dollar)
+        summary_df[f'Change {p_name} (%)'] = summary_df[f'Change_{p_name}_%'].apply(_format_change_percent)
+
+    summary_df.rename(columns={
+        'Asset Class': 'Asset Class',
+        'Total_Cost': 'Total Cost',
+        'Asset_Count': '# Assets'
+    }, inplace=True)
+
+    summary_df = summary_df.sort_values(by='Total Market Value', ascending=False)
+
+    cols_ordered = [
+        'Asset Class', 'Total Market Value', 'Allocation (%)', 'Total Cost', '# Assets',
+        'Change 1D ($)', 'Change 1D (%)', 'Change 5D ($)', 'Change 5D (%)',
+        'Change 1M ($)', 'Change 1M (%)', 'Change 3M ($)', 'Change 3M (%)',
+        'Change 6M ($)', 'Change 6M (%)'
+    ]
+
+    final_cols = [col for col in cols_ordered if col in summary_df.columns]
+
+    html_content = create_html_table(
+        df_display=summary_df[final_cols],
+        table_title="Summary by Asset Class",
+        table_id="summaryByAssetClassTable"
+    )
+    return {"type": "table", "html": html_content}
+
+
 def calculate_net_worth_and_spy_benchmark(
         portfolio_df: pd.DataFrame,
         period: str,
@@ -269,18 +494,16 @@ def build_historical_networth_section(
         fig.to_html(full_html=False, include_plotlyjs=True, div_id="chart-net-worth", config={'responsive': True})]}
 
 
-def get_net_worth_at_previous_day(portfolio_df: pd.DataFrame, days_ago: int,
-                                  base_historical_df: pd.DataFrame | None) -> float | None:
+def get_net_worth_at_previous_day(days_ago: int, base_historical_df: pd.DataFrame | None) -> float | None:
     if days_ago <= 0: return None
     if base_historical_df is None or base_historical_df.empty:
         logging.warning(f"No base historical data provided for change calc ({days_ago} days ago).")
         return None
-    # base_historical_df should already be sorted by Date descending from its creation in build_key_metrics_section
+    # base_historical_df should already be sorted by Date descending from its creation.
     if len(base_historical_df) > days_ago:
         return base_historical_df['Net Worth'].iloc[days_ago]
-    else:
-        logging.warning(f"Not enough hist data points ({len(base_historical_df)}) for value {days_ago} days ago.")
-        return None
+    logging.warning(f"Not enough hist data points ({len(base_historical_df)}) for value {days_ago} days ago.")
+    return None
 
 
 def build_key_metrics_section(
@@ -289,8 +512,6 @@ def build_key_metrics_section(
         rebuild_cache: bool = False,
         interactive_fallback: bool = True
 ) -> dict:
-    # ... (Logic from your previous correct version, ensure calculate_net_worth_and_spy_benchmark calls pass interactive_fallback & rebuild_cache) ...
-    # ... and get_net_worth_at_previous_day is called with the pre-fetched base_historical_nw_df.
     logging.info(f"Building key metrics section (rebuild_cache={rebuild_cache}, interactive={interactive_fallback})...")
     metrics = []
     current_net_worth = current_portfolio_processed_df['Market Value'].sum()
@@ -346,8 +567,7 @@ def build_key_metrics_section(
         logging.warning("Cannot get recent historical data for KPI change calculations; metrics will be N/A.")
 
     for label, (days_offset, _) in change_definitions.items():
-        prev_net_worth = get_net_worth_at_previous_day(None, days_offset,
-                                                       base_historical_df=sorted_base_historical)  # Pass sorted df
+        prev_net_worth = get_net_worth_at_previous_day(days_offset, base_historical_df=sorted_base_historical)
         change_abs_val, change_pct_val, is_positive = None, None, None
         if prev_net_worth is not None and last_close_net_worth_for_changes is not None and prev_net_worth != 0:
             change_abs_val = last_close_net_worth_for_changes - prev_net_worth
@@ -361,7 +581,6 @@ def build_key_metrics_section(
     return {"type": "key_metrics", "metrics": metrics}
 
 
-# --- get_asset_value_at_offset (modified for robustness) ---
 def get_asset_value_at_offset(
         symbol: str,
         amount: float,
@@ -390,107 +609,6 @@ def get_asset_value_at_offset(
                 f"Index out of bounds for {symbol} with offset {days_offset} from end. Available: {len(valid_prices)}")
             return None
     return None
-
-
-def build_summary_by_symbol_section(processed_df: pd.DataFrame) -> dict:
-    """Builds the Summary by Symbol table section."""
-    logging.info("Building summary by symbol section...")
-    if processed_df.empty or 'Market Value' not in processed_df.columns:
-        return {"type": "html_content", "html": "<p>No data available for symbol summary.</p>"}
-
-    # Ensure 'price' is numeric before aggregation if it's not already
-    # This should be handled by process_portfolio_data, but a check here is safe
-    df_for_summary = processed_df.copy()
-    if 'price' in df_for_summary.columns:
-        df_for_summary['price'] = pd.to_numeric(df_for_summary['price'], errors='coerce')
-    else:
-        df_for_summary['price'] = 0.0  # Default if somehow missing
-
-    if 'Cost' in df_for_summary.columns:
-        df_for_summary['Cost'] = pd.to_numeric(df_for_summary['Cost'], errors='coerce').fillna(0.0)
-    else:
-        df_for_summary['Cost'] = 0.0
-
-    summary_df = df_for_summary.groupby('Symbol').agg(
-        Name=('name', 'first'),
-        Total_Amount=('Amount', 'sum'),
-        Latest_Price=('price', 'first'),  # Get the latest price (should be unique per symbol)
-        Total_Market_Value=('Market Value', 'sum'),
-        Asset_Type=('type', 'first'),
-        Sector=('sector', 'first'),
-        Risk_Level=('Risk Level', 'first'),
-        Total_Cost=('Cost', 'sum')
-    ).reset_index()
-
-    summary_df.rename(columns={
-        'Symbol': 'Symbol',
-        'Name': 'Asset Name',
-        'Total_Amount': 'Total Amount',
-        'Latest_Price': 'Latest Price',  # New column
-        'Total_Market_Value': 'Total Market Value',
-        'Asset_Type': 'Type',
-        'Sector': 'Sector',
-        'Risk_Level': 'Risk Level',
-        'Total_Cost': 'Total Cost'
-    }, inplace=True)
-
-    # Formatting for display
-    summary_df['Latest Price'] = summary_df['Latest Price'].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "N/A")
-    summary_df['Total Market Value'] = summary_df['Total Market Value'].apply(
-        lambda x: f"${x:,.2f}" if pd.notnull(x) else "N/A")
-    summary_df['Total Cost'] = summary_df['Total Cost'].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "N/A")
-    summary_df['Total Amount'] = summary_df['Total Amount'].apply(
-        lambda x: f"{x:,.4f}".rstrip('0').rstrip('.') if pd.notnull(x) and isinstance(x, float) and x % 1 != 0 else (
-            f"{x:,.0f}" if pd.notnull(x) and isinstance(x, (int, float)) else ("N/A" if pd.isnull(x) else str(x)))
-    )
-
-    # Define the order of columns, including the new 'Latest Price'
-    cols_ordered = ['Symbol', 'Asset Name', 'Total Amount', 'Latest Price', 'Total Market Value', 'Total Cost', 'Type',
-                    'Sector', 'Risk Level']
-
-    # Ensure all columns in cols_ordered exist in summary_df, otherwise, they won't be selected
-    final_cols_to_display = [col for col in cols_ordered if col in summary_df.columns]
-    summary_df = summary_df[final_cols_to_display]
-
-    html_content = create_html_table(
-        df_display=summary_df,
-        table_title="Summary by Symbol",
-        table_id="summaryBySymbolTable"
-    )
-    return {"type": "table", "html": html_content}
-
-
-def build_summary_by_risk_level_section(processed_df: pd.DataFrame) -> dict:
-    logging.info("Building summary by asset risk level section...")
-    if processed_df.empty or 'Risk Level' not in processed_df.columns or 'Market Value' not in processed_df.columns:
-        return {"type": "html_content", "html": "<p>No data available for risk level summary.</p>"}
-
-    summary_df = processed_df.groupby('Risk Level').agg(
-        Total_Market_Value=('Market Value', 'sum'),
-        Asset_Count=('Symbol', 'nunique')  # Count of unique symbols in that risk category
-    ).reset_index()
-
-    total_portfolio_value = processed_df['Market Value'].sum()
-    if total_portfolio_value > 0:
-        summary_df['Allocation (%)'] = (summary_df['Total_Market_Value'] / total_portfolio_value) * 100
-        summary_df['Allocation (%)'] = summary_df['Allocation (%)'].apply(lambda x: f"{x:.2f}%")
-    else:
-        summary_df['Allocation (%)'] = "0.00%"
-
-    summary_df.rename(columns={
-        'Risk Level': 'Risk Level Category',
-        'Total_Market_Value': 'Total Market Value',
-        'Asset_Count': 'Number of Assets'
-    }, inplace=True)
-
-    summary_df['Total Market Value'] = summary_df['Total Market Value'].apply(lambda x: f"${x:,.2f}")
-    summary_df = summary_df.sort_values(by='Risk Level Category')
-    cols_ordered = ['Risk Level Category', 'Total Market Value', 'Allocation (%)', 'Number of Assets']
-    summary_df = summary_df[cols_ordered]
-
-    html_content = create_html_table(df_display=summary_df, table_title="Summary by Asset Risk Level",
-                                     table_id="summaryByRiskTable")
-    return {"type": "table", "html": html_content}
 
 
 def build_top_movers_section(
@@ -558,47 +676,6 @@ def build_top_movers_section(
     return {"type": "top_movers", "data": all_movers_data}
 
 
-# --- Delete the entire build_asset_allocation_section function ---
-
-# --- Add this new function in its place ---
-def build_summary_by_asset_class_section(processed_df: pd.DataFrame) -> dict:
-    """Builds the Summary by Asset Class table."""
-    logging.info("Building summary by asset class section...")
-    if processed_df.empty or 'Asset Class' not in processed_df.columns or 'Market Value' not in processed_df.columns:
-        return {"type": "html_content", "html": "<p>No data available for asset class summary.</p>"}
-
-    summary_df = processed_df.groupby('Asset Class').agg(
-        Total_Market_Value=('Market Value', 'sum'),
-        Asset_Count=('Symbol', 'nunique')
-    ).reset_index()
-
-    total_portfolio_value = processed_df['Market Value'].sum()
-    if total_portfolio_value > 0:
-        summary_df['Allocation (%)'] = (summary_df['Total_Market_Value'] / total_portfolio_value) * 100
-        summary_df['Allocation (%)'] = summary_df['Allocation (%)'].apply(lambda x: f"{x:.2f}%")
-    else:
-        summary_df['Allocation (%)'] = "0.00%"
-
-    summary_df.rename(columns={
-        'Asset Class': 'Asset Class',
-        'Total_Market_Value': 'Total Market Value',
-        'Asset_Count': 'Number of Assets'
-    }, inplace=True)
-
-    summary_df['Total Market Value'] = summary_df['Total Market Value'].apply(lambda x: f"${x:,.2f}")
-    summary_df = summary_df.sort_values(by='Total Market Value', ascending=False)
-    cols_ordered = ['Asset Class', 'Total Market Value', 'Allocation (%)', 'Number of Assets']
-    summary_df = summary_df[cols_ordered]
-
-    html_content = create_html_table(
-        df_display=summary_df,
-        table_title="Summary by Asset Class",
-        table_id="summaryByAssetClassTable"
-    )
-    return {"type": "table", "html": html_content}
-
-
-# --- Replace the existing build_holdings_summary_section function ---
 def build_holdings_summary_section(processed_df: pd.DataFrame) -> dict:
     logging.info("Building holdings details section...")
     df_investments = processed_df[processed_df['type'] != 'Cash'].copy()
@@ -622,7 +699,7 @@ def build_holdings_summary_section(processed_df: pd.DataFrame) -> dict:
         df_investments['Gain/Loss %'] = (df_investments['Gain/Loss $'] / df_investments['Cost'].replace(0,
                                                                                                         np.nan)) * 100
 
-        # MODIFIED: Added 'Asset Class' to the display columns
+        # ADDED 'Asset Class' to the display columns
         columns_to_display = [
             "Account", "Symbol", "name", "Amount", "price", "Market Value", "Cost",
             "Gain/Loss $", "Gain/Loss %", "type", "sector", "Risk Level", "Asset Class"
@@ -667,7 +744,7 @@ def build_holdings_summary_section(processed_df: pd.DataFrame) -> dict:
         final_html += investment_html
 
     if not df_cash.empty:
-        # MODIFIED: Added 'Asset Class' to cash holdings as well for consistency
+        # ADDED 'Asset Class' to cash holdings as well for consistency
         df_cash['Asset Class'] = 'Cash & Equivalents'
         cash_columns_to_display = ["Account", "Symbol", "name", "Market Value", "Asset Class"]
         df_cash_display = df_cash.reindex(columns=cash_columns_to_display).copy()

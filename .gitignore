@@ -11,3 +11,5 @@ wheels/
 !/.venv/
 .cache
 portfolio_report.html
+assets.bak.csv
+*.zip

@@ -30,9 +30,75 @@ DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 30  # Define a default timeout for yf.downloa
 
 CASH_EQUIVALENT_SYMBOLS = {"CASH", "SPAXX", "VMFXX", "SWVXX"}
 
+# --- CONSTANTS FOR RISK/ASSET CLASS DETERMINATION ---
+# Moved to module level to fix pylint C0103 (invalid-name) and improve performance.
+RISK_LEVEL_CASH_KEYWORDS = [
+    "money market", "treasury bill", "spaxx", "vmfxx", "swvxx", "fdrxx", "govmmkt",
+    "fgmxx", "t-bill"
+]
+RISK_LEVEL_BOND_KEYWORDS = [
+    "bond", "fixed income", "treasury", "government debt", "corporate debt", "aggregate bond",
+    "muni", "bnd", "agg"
+]
+RISK_LEVEL_TARGET_DATE_KEYWORDS = [
+    "target date", "target-date", "target retirement", "freedom index",
+    "vffsx", "vdadx", "vforx", "vthrx", "vtwax",
+    "fitfx", "ffwax", "fdeex"
+]
+RISK_LEVEL_BROAD_EQUITY_KEYWORDS = [
+    "total stock market", "s&p 500", "500 index", "large blend", "large cap",
+    "russell 1000", "russell 3000", "developed markets", "world stock", "global equity",
+    "broad market", "nasdaq-100",
+    "vfiax", "vtsax", "voo", "vti",
+    "fxaix", "fskax", "fzilx",
+    "swppx", "swtsx",
+    "qqq", "spy"
+]
+RISK_LEVEL_SECTOR_THEMATIC_KEYWORDS = [
+    "technology", "health", "financial", "real estate", "communications", "utilities",
+    "consumer discretionary", "growth", "value", "small cap", "mid cap", "small-cap",
+    "mid-cap", "flapx", "flxsx", "fdgrx"
+]
+RISK_LEVEL_COMMODITY_KEYWORDS = ["gold", "commodities", "gld"]
 
-# --- get_user_symbol_mapping_input (Keep as is) ---
-# ... (implementation from your previous working version) ...
+ASSET_CLASS_TICKER_MAP = {
+    # Broad Market Equity
+    'vti': 'Broad Market Equity', 'vtsax': 'Broad Market Equity',
+    'voo': 'Broad Market Equity', 'vfiax': 'Broad Market Equity',
+    'fxaix': 'Broad Market Equity', 'fskax': 'Broad Market Equity',
+    'swppx': 'Broad Market Equity', 'swtsx': 'Broad Market Equity',
+    'spy': 'Broad Market Equity', 'qqq': 'Broad Market Equity',
+
+    # Target Date Funds
+    'vffsx': 'Target Date Fund', 'vdadx': 'Target Date Fund',
+    'vforx': 'Target Date Fund', 'vthrx': 'Target Date Fund',
+    'vtwax': 'Target Date Fund',
+    'fitfx': 'Target Date Fund', 'fdfix': 'Target Date Fund',
+    'ffwax': 'Target Date Fund', 'fdeex': 'Target Date Fund',
+
+    # Bonds / Fixed Income
+    'ftabx': 'Bonds / Fixed Income', 'bnd': 'Bonds / Fixed Income',
+    'agg': 'Bonds / Fixed Income',
+
+    # Sector / Thematic Funds
+    'fuenx': 'Sector / Thematic Fund (Energy)',
+    'flapx': 'Sector / Thematic Fund (Large Cap)',
+    'flxsx': 'Sector / Thematic Fund (Large Cap)',
+    'fdgrx': 'Sector / Thematic Fund (Large Growth)',
+
+    # Cash & Equivalents
+    'spaxx': 'Cash & Equivalents', 'vmfxx': 'Cash & Equivalents',
+    'swvxx': 'Cash & Equivalents', 'fdrxx': 'Cash & Equivalents',
+}
+ASSET_CLASS_CASH_KEYWORDS = ["money market", "treasury bill", "govmmkt", "fgmxx", "t-bill"]
+ASSET_CLASS_BOND_KEYWORDS = ["bond", "fixed income", "treasury", "government debt", "corporate debt", "aggregate bond",
+                             "muni"]
+ASSET_CLASS_COMMODITY_KEYWORDS = ["gold", "commodities", "gld"]
+ASSET_CLASS_REAL_ESTATE_KEYWORDS = ["real estate", "reit"]
+ASSET_CLASS_TARGET_DATE_KEYWORDS = ["target-date", "target retirement", "freedom index"]
+ASSET_CLASS_BROAD_MARKET_KEYWORDS = ["large blend", "large cap", "s&p 500", "total stock market", "world stock"]
+
+
 def get_user_symbol_mapping_input(original_symbol: str, context_msg: str) -> tuple[str | None, float | None, bool]:
     print("-" * 40)
     logging.warning(f"DATA FETCH FAILED for symbol: '{original_symbol}' (context: {context_msg})")
@@ -66,8 +132,6 @@ def get_user_symbol_mapping_input(original_symbol: str, context_msg: str) -> tup
     return mapped_symbol_input, price_factor, False
 
 
-# --- get_effective_symbol_info (Keep as is) ---
-# ... (implementation from your previous working version) ...
 def get_effective_symbol_info(original_symbol: str, context_msg: str, interactive_fallback: bool) -> tuple[
     str, float, bool, bool]:
     original_symbol_upper = original_symbol.strip().upper()
@@ -85,7 +149,6 @@ def get_effective_symbol_info(original_symbol: str, context_msg: str, interactiv
     return original_symbol_upper, 1.0, False, False
 
 
-# --- get_asset_details (Retry logic and no direct timeout parameter) ---
 def get_asset_details(symbol: str, rebuild_cache: bool = False, interactive_fallback: bool = True, max_retries: int = 3,
                       retry_delay_seconds: int = 2):
     original_symbol_cleaned = symbol.strip().upper()
@@ -114,9 +177,8 @@ def get_asset_details(symbol: str, rebuild_cache: bool = False, interactive_fall
             # Add the effective symbol to the cached dict before returning
             cached_info_dict["effective_symbol"] = effective_symbol
             return cached_info_dict
-        else:
-            logging.warning(
-                f"Cached info for {effective_symbol} (from {original_symbol_cleaned}) is incomplete. Re-fetching.")
+        logging.warning(
+            f"Cached info for {effective_symbol} (from {original_symbol_cleaned}) is incomplete. Re-fetching.")
 
     logging.info(f"Asset details for {original_symbol_cleaned} (trying {effective_symbol}): Fetching from API.")
     symbols_to_try = [effective_symbol]
@@ -138,9 +200,8 @@ def get_asset_details(symbol: str, rebuild_cache: bool = False, interactive_fall
                     logging.info(
                         f"Successfully fetched info for API symbol '{sym_variant}' (original: '{original_symbol_cleaned}') on attempt {attempt + 1}.")
                     break
-                else:
-                    logging.debug(
-                        f"Info for '{sym_variant}' empty or lacked key price fields for {original_symbol_cleaned}.")
+                logging.debug(
+                    f"Info for '{sym_variant}' empty or lacked key price fields for {original_symbol_cleaned}.")
             except NETWORK_EXCEPTIONS as e_net:
                 logging.warning(
                     f"Network/API error on attempt {attempt + 1} for '{sym_variant}': {type(e_net).__name__} - {e_net}")
@@ -162,11 +223,10 @@ def get_asset_details(symbol: str, rebuild_cache: bool = False, interactive_fall
                                                             "treat_as_cash": treat_as_cash}
                 save_symbol_mappings(SYMBOL_MAPPINGS)
                 return get_asset_details(original_symbol_cleaned, rebuild_cache, False, 1)
-            else:
-                SYMBOL_MAPPINGS[original_symbol_cleaned] = {"maps_to": original_symbol_cleaned, "factor": 0.0,
-                                                            "treat_as_cash": False, "ignore_interactive": True}
-                save_symbol_mappings(SYMBOL_MAPPINGS)
-                return return_dict  # Return dict with original symbol as effective
+            SYMBOL_MAPPINGS[original_symbol_cleaned] = {"maps_to": original_symbol_cleaned, "factor": 0.0,
+                                                        "treat_as_cash": False, "ignore_interactive": True}
+            save_symbol_mappings(SYMBOL_MAPPINGS)
+            return return_dict  # Return dict with original symbol as effective
         return_dict["type"] = "Unknown (API Fail)"
         return return_dict
 
@@ -208,7 +268,6 @@ def get_asset_details(symbol: str, rebuild_cache: bool = False, interactive_fall
     return details_to_return
 
 
-# --- get_historical_prices (Retry logic and yf.download timeout parameter) ---
 def get_historical_prices(
         symbols: list,
         period: str,
@@ -353,13 +412,10 @@ def get_historical_prices(
     return final_result_df.astype(float)
 
 
-# --- determine_risk_level (Keep as is) ---
-# ... (implementation from your previous working version) ...
 def determine_risk_level(effective_symbol: str, asset_type: str, sector: str, name: str, category: str,
                          beta: float | None) -> str:
     """
     Determines asset risk level using a hybrid data-driven and keyword-based approach.
-    This version includes more comprehensive keywords for fund classification.
     """
     asset_type_lower = str(asset_type).lower()
 
@@ -377,55 +433,19 @@ def determine_risk_level(effective_symbol: str, asset_type: str, sector: str, na
     effective_symbol_lower = str(effective_symbol).lower()
     search_text = f"{effective_symbol_lower} {str(name).lower()} {str(sector).lower()} {str(category).lower()}"
 
-    # --- FINAL, MORE COMPREHENSIVE KEYWORD LISTS ---
-    CASH_KEYWORDS = [
-        "money market", "treasury bill", "spaxx", "vmfxx", "swvxx", "fdrxx", "govmmkt",
-        "fgmxx", "t-bill"
-    ]
-    BOND_KEYWORDS = [
-        "bond", "fixed income", "treasury", "government debt", "corporate debt", "aggregate bond",
-        "muni", "bnd", "agg"
-    ]
-    TARGET_DATE_KEYWORDS = [
-        "target date", "target-date", "target retirement", "freedom index",
-        "vffsx", "vdadx", "vforx", "vthrx", "vtwax",  # Vanguard
-        "fitfx", "ffwax", "fdeex"  # Fidelity
-    ]
-    BROAD_EQUITY_KEYWORDS = [
-        "total stock market", "s&p 500", "500 index", "large blend", "large cap",
-        "russell 1000", "russell 3000", "developed markets", "world stock", "global equity",
-        "broad market", "nasdaq-100",
-        "vfiax", "vtsax", "voo", "vti",  # Vanguard
-        "fxaix", "fskax", "fzilx",  # Fidelity
-        "swppx", "swtsx",  # Schwab
-        "qqq", "spy"
-    ]
-    SECTOR_THEMATIC_KEYWORDS = [
-        # Sectors
-        "technology", "health", "financial", "real estate", "communications", "utilities",
-        "consumer discretionary",
-        # Styles
-        "growth", "value",
-        # Sizes
-        "small cap", "mid cap", "small-cap", "mid-cap",
-        # Specific Tickers
-        "flapx", "flxsx", "fdgrx"
-    ]
-    COMMODITY_KEYWORDS = ["gold", "commodities", "gld"]
-
-    if asset_type_lower == "cash" or any(kw in search_text for kw in CASH_KEYWORDS):
+    if asset_type_lower == "cash" or any(kw in search_text for kw in RISK_LEVEL_CASH_KEYWORDS):
         return "1 - Lowest Risk (Cash/Equiv.)"
-    if any(kw in search_text for kw in BOND_KEYWORDS):
+    if any(kw in search_text for kw in RISK_LEVEL_BOND_KEYWORDS):
         return "2 - Low Risk (Bonds)"
     if asset_type_lower in ("stock", "equity"):
         return "4 - High Risk (Individual Stocks)"
-    if any(kw in search_text for kw in TARGET_DATE_KEYWORDS):
+    if any(kw in search_text for kw in RISK_LEVEL_TARGET_DATE_KEYWORDS):
         return "3M - Medium Risk (Other Equity Fund)"
-    if any(kw in search_text for kw in BROAD_EQUITY_KEYWORDS):
+    if any(kw in search_text for kw in RISK_LEVEL_BROAD_EQUITY_KEYWORDS):
         return "3 - Medium Risk (Broad Equity)"
-    if any(kw in search_text for kw in SECTOR_THEMATIC_KEYWORDS):
+    if any(kw in search_text for kw in RISK_LEVEL_SECTOR_THEMATIC_KEYWORDS):
         return "3H - Med-High Risk (Sector/Thematic Equity)"
-    if any(kw in search_text for kw in COMMODITY_KEYWORDS):
+    if any(kw in search_text for kw in RISK_LEVEL_COMMODITY_KEYWORDS):
         return "4 - High Risk (Commodities)"
     if asset_type_lower in ("etf", "mutual fund"):
         return "3H - Med-High Risk (Sector/Thematic Equity)"
@@ -499,59 +519,21 @@ def process_portfolio_data(df_input: pd.DataFrame, rebuild_cache: bool = False,
 def determine_asset_class(effective_symbol: str, asset_type: str, sector: str, name: str, category: str) -> str:
     """
     Determines a detailed asset class using a definitive, two-layer approach.
-    1. A high-priority ticker map provides guaranteed classification for common funds.
-    2. A hierarchical, data-driven fallback handles less common assets.
     """
     effective_symbol_lower = str(effective_symbol).lower()
 
-    # --- Layer 1: Definitive Ticker-to-Class Mapping (Highest Priority) ---
-    TICKER_TO_CLASS_MAP = {
-        # Broad Market Equity
-        'vti': 'Broad Market Equity', 'vtsax': 'Broad Market Equity',
-        'voo': 'Broad Market Equity', 'vfiax': 'Broad Market Equity',
-        'fxaix': 'Broad Market Equity', 'fskax': 'Broad Market Equity',
-        'swppx': 'Broad Market Equity', 'swtsx': 'Broad Market Equity',
-        'spy': 'Broad Market Equity', 'qqq': 'Broad Market Equity',
+    # Layer 1: Definitive Ticker-to-Class Mapping (Highest Priority)
+    if effective_symbol_lower in ASSET_CLASS_TICKER_MAP:
+        return ASSET_CLASS_TICKER_MAP[effective_symbol_lower]
 
-        # Target Date Funds
-        'vffsx': 'Target Date Fund', 'vdadx': 'Target Date Fund',
-        'vforx': 'Target Date Fund', 'vthrx': 'Target Date Fund',
-        'vtwax': 'Target Date Fund',
-        'fitfx': 'Target Date Fund', 'fdfix': 'Target Date Fund',
-        'ffwax': 'Target Date Fund', 'fdeex': 'Target Date Fund',
-
-        # Bonds / Fixed Income
-        'ftabx': 'Bonds / Fixed Income', 'bnd': 'Bonds / Fixed Income',
-        'agg': 'Bonds / Fixed Income',
-
-        # Sector / Thematic Funds
-        'fuenx': 'Sector / Thematic Fund (Energy)',
-        'flapx': 'Sector / Thematic Fund (Large Cap)',
-        'flxsx': 'Sector / Thematic Fund (Large Cap)',
-        'fdgrx': 'Sector / Thematic Fund (Large Growth)',
-
-        # Cash & Equivalents
-        'spaxx': 'Cash & Equivalents', 'vmfxx': 'Cash & Equivalents',
-        'swvxx': 'Cash & Equivalents', 'fdrxx': 'Cash & Equivalents',
-    }
-    if effective_symbol_lower in TICKER_TO_CLASS_MAP:
-        return TICKER_TO_CLASS_MAP[effective_symbol_lower]
-
-    # --- Layer 2: Hierarchical Fallback for Unmapped Tickers ---
+    # Layer 2: Hierarchical Fallback for Unmapped Tickers
     asset_type_lower = str(asset_type).lower()
     search_text = f"{effective_symbol_lower} {str(name).lower()} {str(sector).lower()} {str(category).lower()}"
 
-    CASH_KEYWORDS = ["money market", "treasury bill", "govmmkt", "fgmxx", "t-bill"]
-    BOND_KEYWORDS = ["bond", "fixed income", "treasury", "government debt", "corporate debt", "aggregate bond", "muni"]
-    COMMODITY_KEYWORDS = ["gold", "commodities", "gld"]
-    REAL_ESTATE_KEYWORDS = ["real estate", "reit"]
-    TARGET_DATE_KEYWORDS = ["target-date", "target retirement", "freedom index"]
-    BROAD_MARKET_KEYWORDS = ["large blend", "large cap", "s&p 500", "total stock market", "world stock"]
-
     if asset_type_lower == 'cash' or asset_type_lower == 'moneymarket' or any(
-            kw in search_text for kw in CASH_KEYWORDS):
+            kw in search_text for kw in ASSET_CLASS_CASH_KEYWORDS):
         return "Cash & Equivalents"
-    if any(kw in search_text for kw in COMMODITY_KEYWORDS):
+    if any(kw in search_text for kw in ASSET_CLASS_COMMODITY_KEYWORDS):
         return "Commodities"
 
     if asset_type_lower in ('stock', 'equity'):
@@ -562,10 +544,10 @@ def determine_asset_class(effective_symbol: str, asset_type: str, sector: str, n
         return "Individual Stock"
 
     if asset_type_lower in ('etf', 'mutual fund'):
-        if any(kw in search_text for kw in BOND_KEYWORDS): return "Bonds / Fixed Income"
-        if any(kw in search_text for kw in REAL_ESTATE_KEYWORDS): return "Real Estate"
-        if any(kw in search_text for kw in TARGET_DATE_KEYWORDS): return "Target Date Fund"
-        if any(kw in search_text for kw in BROAD_MARKET_KEYWORDS): return "Broad Market Equity"
+        if any(kw in search_text for kw in ASSET_CLASS_BOND_KEYWORDS): return "Bonds / Fixed Income"
+        if any(kw in search_text for kw in ASSET_CLASS_REAL_ESTATE_KEYWORDS): return "Real Estate"
+        if any(kw in search_text for kw in ASSET_CLASS_TARGET_DATE_KEYWORDS): return "Target Date Fund"
+        if any(kw in search_text for kw in ASSET_CLASS_BROAD_MARKET_KEYWORDS): return "Broad Market Equity"
         if sector and sector != 'N/A':
             if sector in ["Technology", "Communication Services"]: return "Technology & Communications (Fund)"
             if sector in ["Consumer Cyclical", "Consumer Defensive"]: return "Consumer Goods & Services (Fund)"

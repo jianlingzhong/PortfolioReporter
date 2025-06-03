@@ -8,7 +8,8 @@ import logging
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
-def generate_html_report(report_sections: dict, output_path: str = "portfolio_report.html"):
+def generate_html_report(report_sections: dict, output_path: str = "portfolio_report.html",
+                         drilldown_data: str = "[]"):
     """
     Generates an HTML report from a dictionary of sections using a template file.
     Each value in report_sections should be a dictionary with 'type' and 'html' or 'charts' (list of HTML strings).
@@ -29,7 +30,7 @@ def generate_html_report(report_sections: dict, output_path: str = "portfolio_re
         return
 
     try:
-        html_content = template.render(sections=report_sections)
+        html_content = template.render(sections=report_sections, drilldown_data=drilldown_data)
     except Exception as e:
         logging.error(f"Error rendering Jinja2 template: {e}")
         # Optionally print report_sections structure for debugging
