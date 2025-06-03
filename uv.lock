@@ -675,13 +675,13 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastparquet", specifier = ">=2024.11.0" },
-    { name = "jinja2", specifier = ">=3.1.6" },
-    { name = "ofxparse", specifier = ">=0.21" },
-    { name = "pandas", specifier = ">=2.2.3" },
-    { name = "plotly", specifier = ">=6.1.1" },
-    { name = "pyarrow", specifier = ">=20.0.0" },
-    { name = "yfinance", specifier = ">=0.2.61" },
+    { name = "fastparquet", specifier = "~=2024.11.0" },
+    { name = "jinja2", specifier = "~=3.1.6" },
+    { name = "ofxparse", specifier = "~=0.21" },
+    { name = "pandas", specifier = "~=2.2.3" },
+    { name = "plotly", specifier = "~=6.1.1" },
+    { name = "pyarrow", specifier = "~=20.0.0" },
+    { name = "yfinance", specifier = "~=0.2.61" },
 ]
 
 [[package]]

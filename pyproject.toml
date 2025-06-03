@@ -5,11 +5,11 @@ description = "Generates an HTML portfolio report."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "fastparquet>=2024.11.0",
-  "jinja2>=3.1.6",
-  "ofxparse>=0.21",
-  "pandas>=2.2.3",
-  "plotly>=6.1.1",
-  "pyarrow>=20.0.0",
-  "yfinance>=0.2.61",
+    "fastparquet~=2024.11.0",
+    "jinja2~=3.1.6",
+    "ofxparse~=0.21",
+    "pandas~=2.2.3",
+    "plotly~=6.1.1",
+    "pyarrow~=20.0.0",
+    "yfinance~=0.2.61",
 ]
